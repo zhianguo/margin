@@ -1,0 +1,65 @@
+{
+  "name": "margin-pdf-reader",
+  "version": "0.1.0",
+  "description": "A local-first PDF reader with structured explanations for difficult passages and formulas.",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhianguo/margin.git"
+  },
+  "homepage": "https://github.com/zhianguo/margin#readme",
+  "bugs": {
+    "url": "https://github.com/zhianguo/margin/issues"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n reader,api -c cyan,magenta \"vite\" \"tsx watch server/index.ts\"",
+    "fixture:download": "node scripts/download-public-test-pdf.mjs",
+    "generate:demo": "node scripts/generate-demo-pdf.mjs",
+    "build": "npm run typecheck && vite build && node scripts/build-sites-worker.mjs && tsc -p server/tsconfig.json",
+    "public:check": "node scripts/check-publication.mjs",
+    "start": "NODE_ENV=production node dist-server/index.js",
+    "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit && tsc -p server/tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke": "node scripts/browser-smoke.mjs \"${SMOKE_ORIGIN:-http://127.0.0.1:8787}/?demo=1\" --home-resume && node scripts/browser-smoke.mjs \"${SMOKE_ORIGIN:-http://127.0.0.1:8787}/\" --upload-local",
+    "smoke:single": "node scripts/browser-smoke.mjs",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.3.0",
+    "helmet": "^8.1.0",
+    "katex": "^0.16.25",
+    "lucide-react": "^0.468.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-markdown": "^10.1.0",
+    "react-pdf": "^10.4.1",
+    "rehype-katex": "^7.0.1",
+    "remark-math": "^6.0.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.4",
+    "concurrently": "^9.2.1",
+    "esbuild": "^0.28.1",
+    "jsdom": "^29.1.1",
+    "pdf-lib": "^1.17.1",
+    "tsx": "^4.21.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

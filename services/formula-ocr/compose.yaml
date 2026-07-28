@@ -1,0 +1,19 @@
+services:
+  formula-ocr:
+    build:
+      context: .
+    image: margin-formula-ocr:pix2tex-0.1.4
+    ports:
+      - "${FORMULA_OCR_BIND:-127.0.0.1}:${FORMULA_OCR_PORT:-8502}:8502"
+    environment:
+      FORMULA_OCR_API_KEY: "${FORMULA_OCR_API_KEY:-}"
+      OMP_NUM_THREADS: "${FORMULA_OCR_THREADS:-4}"
+      MKL_NUM_THREADS: "${FORMULA_OCR_THREADS:-4}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    restart: unless-stopped

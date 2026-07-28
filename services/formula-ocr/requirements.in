@@ -1,0 +1,9 @@
+# Core model and API runtime. Recompile with the command in requirements.lock.txt.
+pix2tex==0.1.4
+fastapi==0.115.6
+uvicorn==0.34.0
+torch==2.2.2
+torchvision==0.17.2
+numpy==1.26.4
+Pillow==10.4.0
+transformers==4.48.1

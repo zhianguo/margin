@@ -1,0 +1,21 @@
+[
+  {
+    "id": "arxiv-2003.05465v2",
+    "title": "Characterization of solvable spin models via graph invariants",
+    "authors": [
+      "Adrian Chapman",
+      "Steven T. Flammia"
+    ],
+    "landingPage": "https://arxiv.org/abs/2003.05465",
+    "sourceUrl": "https://arxiv.org/pdf/2003.05465v2",
+    "license": "CC BY 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+    "sha256": "1c9db182c6fe451e15ac016bcbb65405f0eb5590ed5319f353e019cf2f479267",
+    "cachePath": ".cache/pdf-fixtures/arxiv-2003.05465v2.pdf",
+    "features": [
+      "dense mathematical notation",
+      "graphs and tables",
+      "multi-column text"
+    ]
+  }
+]
