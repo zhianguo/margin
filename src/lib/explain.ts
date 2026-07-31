@@ -1,7 +1,10 @@
 import type {
   ExplainMode,
   Explanation,
-  LlmProvider
+  LlmProvider,
+  WebContext,
+  WebSearchWarning,
+  WebSearchFreshness
 } from "../types";
 
 interface ExplainPayload {
@@ -15,12 +18,18 @@ interface ExplainPayload {
   pageNumber: number;
   documentTitle: string;
   mode: ExplainMode;
+  webSearch?: {
+    query: string;
+    freshness: WebSearchFreshness;
+  };
 }
 
 interface ExplainResponse {
   explanation: Explanation;
   model: string;
   provider: LlmProvider;
+  webContext?: WebContext;
+  webSearchWarning?: WebSearchWarning;
 }
 
 export class ExplainApiError extends Error {

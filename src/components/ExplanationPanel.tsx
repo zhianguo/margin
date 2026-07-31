@@ -10,6 +10,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Search,
   Sparkles,
   Trash2,
   X
@@ -20,7 +21,10 @@ import type {
   ExplanationRecord,
   Highlight,
   LlmProvider,
-  ProviderStatus
+  ProviderStatus,
+  WebContext,
+  WebSearchFreshness,
+  WebSource
 } from "../types";
 import type { FormulaRecognitionState } from "../lib/formula-recognition";
 import {
@@ -38,7 +42,13 @@ interface ExplanationPanelProps {
   visualPreviewImage?: string;
   canTreatAsDiagram?: boolean;
   providerStatus: ProviderStatus | null;
+  webSearchEnabled: boolean;
+  webSearchQuery: string;
+  webSearchFreshness: WebSearchFreshness;
   onModeChange: (mode: ExplainMode) => void;
+  onWebSearchEnabledChange: (enabled: boolean) => void;
+  onWebSearchQueryChange: (query: string) => void;
+  onWebSearchFreshnessChange: (freshness: WebSearchFreshness) => void;
   onExplain: () => void;
   onRecognizeFormula: () => void;
   onExplainWithExtractedText: () => void;
@@ -56,6 +66,17 @@ const modes: Array<{ value: ExplainMode; label: string }> = [
   { value: "equation", label: "Math lens" }
 ];
 
+const freshnessOptions: Array<{
+  value: WebSearchFreshness;
+  label: string;
+}> = [
+  { value: "day", label: "Past day" },
+  { value: "week", label: "Past week" },
+  { value: "month", label: "Past month" },
+  { value: "year", label: "Past year" },
+  { value: "any", label: "Any time" }
+];
+
 const providerEnvironmentExamples: Record<LlmProvider, string> = {
   openai: ".env.example",
   llamacpp: ".env.llamacpp.example",
@@ -67,6 +88,57 @@ function quoteExcerpt(text: string): string {
   return text.length > 420 ? `${text.slice(0, 420).trim()}…` : text;
 }
 
+interface NumberedWebSource {
+  number: number;
+  source: WebSource;
+  url: string;
+  domain: string;
+}
+
+function getSafeWebUrl(value: string): URL | null {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") &&
+      !url.username &&
+      !url.password
+      ? url
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function getNumberedWebSources(webContext: WebContext): NumberedWebSource[] {
+  const sourceIds = new Set<string>();
+
+  return webContext.sources.flatMap((source) => {
+    const url = getSafeWebUrl(source.url);
+    if (!source.id || sourceIds.has(source.id) || !url) return [];
+
+    sourceIds.add(source.id);
+    return [
+      {
+        number: sourceIds.size,
+        source,
+        url: url.toString(),
+        domain: url.hostname.replace(/^www\./, "")
+      }
+    ];
+  });
+}
+
+function formatWebDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC"
+  }).format(date);
+}
+
 export function ExplanationPanel({
   highlight,
   mode,
@@ -75,7 +147,13 @@ export function ExplanationPanel({
   visualPreviewImage,
   canTreatAsDiagram = false,
   providerStatus,
+  webSearchEnabled,
+  webSearchQuery,
+  webSearchFreshness,
   onModeChange,
+  onWebSearchEnabledChange,
+  onWebSearchQueryChange,
+  onWebSearchFreshnessChange,
   onExplain,
   onRecognizeFormula,
   onExplainWithExtractedText,
@@ -118,6 +196,27 @@ export function ExplanationPanel({
   const normalizedFormulaDraft = editingFormula
     ? normalizeFormulaLatex(formulaDraft)
     : null;
+  const webSearchAvailable = Boolean(providerStatus?.webSearch?.configured);
+  const webSearchQueryInvalid =
+    webSearchEnabled &&
+    webSearchAvailable &&
+    webSearchQuery.trim().length < 2;
+  const numberedWebSources = record?.webContext
+    ? getNumberedWebSources(record.webContext)
+    : [];
+  const numberedWebSourcesById = new Map(
+    numberedWebSources.map((source) => [source.source.id, source])
+  );
+  const webSearchSettingsChanged = Boolean(
+    record?.status === "success" &&
+      webSearchAvailable &&
+      (webSearchEnabled
+        ? record.webContext
+          ? webSearchQuery.trim() !== record.webContext.query ||
+            webSearchFreshness !== record.webContext.freshness
+          : !record.webSearchWarning
+        : record.webContext)
+  );
 
   useEffect(() => {
     setEditingFormula(false);
@@ -132,7 +231,7 @@ export function ExplanationPanel({
 
   const copyExplanation = async () => {
     if (!explanation) return;
-    const text = [
+    const sections = [
       explanation.title,
       explanation.summary,
       explanation.intuition,
@@ -141,7 +240,36 @@ export function ExplanationPanel({
       ...explanation.equations.map(
         (equation) => `${equation.expression}: ${equation.interpretation}`
       )
-    ].join("\n\n");
+    ];
+
+    if (record?.webContext) {
+      const webContext = record.webContext;
+      sections.push(
+        "Latest from the web",
+        `As of ${formatWebDate(webContext.searchedAt)}`,
+        `Search query: ${webContext.query}`,
+        webContext.summary,
+        ...webContext.claims.map((claim) => {
+          const citations = Array.from(new Set(claim.sourceIds))
+            .map((sourceId) => numberedWebSourcesById.get(sourceId))
+            .filter(
+              (source): source is NumberedWebSource => source !== undefined
+            )
+            .map((source) => `[${source.number}]`)
+            .join(" ");
+          return citations ? `${claim.text} ${citations}` : claim.text;
+        }),
+        ...numberedWebSources.map(
+          ({ number, source, url }) => `[${number}] ${source.title} — ${url}`
+        )
+      );
+    }
+
+    if (record?.webSearchWarning) {
+      sections.push("Web search notice", record.webSearchWarning.message);
+    }
+
+    const text = sections.join("\n\n");
     await navigator.clipboard.writeText(text);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1_500);
@@ -397,12 +525,17 @@ export function ExplanationPanel({
                       <strong>Formula transcription unavailable</strong>
                       <p>{formulaRecognitionError}</p>
                       <div>
-                        <button type="button" onClick={onRecognizeFormula}>
+                        <button
+                          type="button"
+                          disabled={webSearchQueryInvalid}
+                          onClick={onRecognizeFormula}
+                        >
                           <RefreshCw size={13} />
                           Retry formula OCR
                         </button>
                         <button
                           type="button"
+                          disabled={webSearchQueryInvalid}
                           onClick={onExplainWithExtractedText}
                         >
                           Explain with extracted text
@@ -496,6 +629,103 @@ export function ExplanationPanel({
             ))}
           </div>
 
+          <section
+            className={`web-search-options${
+              !webSearchAvailable ? " is-unavailable" : ""
+            }`}
+            aria-labelledby={`web-search-label-${highlight.id}`}
+          >
+            <div className="web-search-toggle">
+              <input
+                id={`web-search-enabled-${highlight.id}`}
+                type="checkbox"
+                checked={webSearchEnabled}
+                disabled={!webSearchAvailable}
+                aria-describedby={`web-search-help-${highlight.id}`}
+                onChange={(event) =>
+                  onWebSearchEnabledChange(event.target.checked)
+                }
+              />
+              <label
+                id={`web-search-label-${highlight.id}`}
+                htmlFor={`web-search-enabled-${highlight.id}`}
+              >
+                <Search size={15} aria-hidden="true" />
+                <span>Include current web sources</span>
+              </label>
+            </div>
+            <p id={`web-search-help-${highlight.id}`}>
+              {webSearchAvailable
+                ? `The query below goes to ${
+                    providerStatus?.webSearch?.providerLabel ??
+                    "the configured search provider"
+                  }.`
+                : `Web search is not configured. ${
+                    providerStatus?.webSearch?.configurationError ??
+                    "Configure a search provider to include current sources."
+                  }`}
+            </p>
+
+            {webSearchEnabled && webSearchAvailable ? (
+              <div className="web-search-fields">
+                <label htmlFor={`web-search-query-${highlight.id}`}>
+                  Search query
+                  <input
+                    id={`web-search-query-${highlight.id}`}
+                    type="text"
+                    value={webSearchQuery}
+                    maxLength={300}
+                    aria-invalid={webSearchQueryInvalid}
+                    aria-describedby={
+                      webSearchQueryInvalid
+                        ? `web-search-query-error-${highlight.id}`
+                        : undefined
+                    }
+                    placeholder="What current information should Margin look for?"
+                    onChange={(event) =>
+                      onWebSearchQueryChange(event.target.value)
+                    }
+                  />
+                </label>
+                <label htmlFor={`web-search-freshness-${highlight.id}`}>
+                  Freshness
+                  <select
+                    id={`web-search-freshness-${highlight.id}`}
+                    value={webSearchFreshness}
+                    onChange={(event) =>
+                      onWebSearchFreshnessChange(
+                        event.target.value as WebSearchFreshness
+                      )
+                    }
+                  >
+                    {freshnessOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {webSearchQueryInvalid ? (
+                  <p
+                    id={`web-search-query-error-${highlight.id}`}
+                    className="web-search-validation"
+                    role="alert"
+                  >
+                    Enter at least 2 characters to search the web.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {webSearchSettingsChanged ? (
+              <p className="web-search-state-hint" role="status">
+                {webSearchEnabled
+                  ? "Search settings changed. Regenerate to update this explanation."
+                  : "Web search is off. Regenerate to remove the existing web context."}
+              </p>
+            ) : null}
+          </section>
+
           {(!record || record.status === "idle") &&
           !formulaRecognitionBusy &&
           !formulaRecognitionFailed &&
@@ -503,7 +733,12 @@ export function ExplanationPanel({
             <div className="explain-ready">
               <Sparkles size={20} />
               <p>Ready to unpack this passage with its surrounding page context.</p>
-              <button className="button button-primary button-full" type="button" onClick={onExplain}>
+              <button
+                className="button button-primary button-full"
+                type="button"
+                disabled={webSearchQueryInvalid}
+                onClick={onExplain}
+              >
                 Explain this passage
                 <ChevronRight size={16} />
               </button>
@@ -539,7 +774,12 @@ export function ExplanationPanel({
                   </code>
                 ) : null}
               </div>
-              <button className="button button-secondary button-small" type="button" onClick={onExplain}>
+              <button
+                className="button button-secondary button-small"
+                type="button"
+                disabled={webSearchQueryInvalid}
+                onClick={onExplain}
+              >
                 Try again
               </button>
             </div>
@@ -652,12 +892,128 @@ export function ExplanationPanel({
                 </section>
               ) : null}
 
+              {record.webSearchWarning ? (
+                <section className="web-search-warning" role="status">
+                  <AlertCircle size={16} aria-hidden="true" />
+                  <div>
+                    <strong>
+                      {record.webSearchWarning.code ===
+                      "WEB_SEARCH_NO_RESULTS"
+                        ? "No current web results"
+                        : "Current web sources unavailable"}
+                    </strong>
+                    <p>{record.webSearchWarning.message}</p>
+                  </div>
+                </section>
+              ) : null}
+
+              {record.webContext ? (
+                <section
+                  className="web-context"
+                  aria-labelledby={`web-context-title-${highlight.id}`}
+                >
+                  <div className="web-context-heading">
+                    <div>
+                      <Search size={15} aria-hidden="true" />
+                      <h4 id={`web-context-title-${highlight.id}`}>
+                        Latest from the web
+                      </h4>
+                    </div>
+                    <span>
+                      As of {formatWebDate(record.webContext.searchedAt)}
+                    </span>
+                  </div>
+
+                  <RichText className="web-context-summary">
+                    {record.webContext.summary}
+                  </RichText>
+                  <p className="web-context-query">
+                    <span>Search query</span>
+                    {record.webContext.query}
+                  </p>
+
+                  {record.webContext.claims.length > 0 ? (
+                    <ul className="web-claim-list">
+                      {record.webContext.claims.map((claim, claimIndex) => {
+                        const citedSources = Array.from(
+                          new Set(claim.sourceIds)
+                        )
+                          .map((sourceId) =>
+                            numberedWebSourcesById.get(sourceId)
+                          )
+                          .filter(
+                            (
+                              source
+                            ): source is NumberedWebSource =>
+                              source !== undefined
+                          );
+
+                        return (
+                          <li key={`${claimIndex}-${claim.text}`}>
+                            <RichText>{claim.text}</RichText>
+                            {citedSources.length > 0 ? (
+                              <span
+                                className="web-claim-citations"
+                                aria-label="Sources"
+                              >
+                                {citedSources.map(({ number, source, url }) => (
+                                  <a
+                                    key={source.id}
+                                    href={url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    aria-label={`Source ${number}: ${source.title}`}
+                                  >
+                                    [{number}]
+                                  </a>
+                                ))}
+                              </span>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : null}
+
+                  {numberedWebSources.length > 0 ? (
+                    <div className="web-source-section">
+                      <h5>Sources</h5>
+                      <ol className="web-source-list">
+                        {numberedWebSources.map(
+                          ({ number, source, url, domain }) => (
+                            <li key={source.id} value={number}>
+                              <a
+                                href={url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                {source.title}
+                              </a>
+                              <span>
+                                {domain}
+                                {source.publishedAt
+                                  ? ` · ${formatWebDate(source.publishedAt)}`
+                                  : ""}
+                              </span>
+                            </li>
+                          )
+                        )}
+                      </ol>
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
+
               <div className="answer-actions">
                 <button type="button" onClick={copyExplanation}>
                   {copied ? <Check size={14} /> : <Clipboard size={14} />}
                   {copied ? "Copied" : "Copy"}
                 </button>
-                <button type="button" onClick={onExplain}>
+                <button
+                  type="button"
+                  disabled={webSearchQueryInvalid}
+                  onClick={onExplain}
+                >
                   <RefreshCw size={14} />
                   Regenerate
                 </button>
@@ -667,7 +1023,12 @@ export function ExplanationPanel({
 
           <div className="context-disclosure">
             <span className="context-dot" />
-            Only this selection and its page context are sent for explanation
+            {webSearchEnabled && webSearchAvailable
+              ? `This selection and its page context are sent for explanation. Your search query is also sent to ${
+                  providerStatus?.webSearch?.providerLabel ??
+                  "the configured search provider"
+                }.`
+              : "Only this selection and its page context are sent for explanation"}
           </div>
         </div>
       )}

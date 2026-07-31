@@ -2,7 +2,9 @@ import {
   cleanup,
   fireEvent,
   render,
-  screen
+  screen,
+  waitFor,
+  within
 } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +33,15 @@ const providerStatus: ProviderStatus = {
   model: "local-model",
   aiConfigured: true,
   providerReachable: true
+};
+
+const searchableProviderStatus: ProviderStatus = {
+  ...providerStatus,
+  webSearch: {
+    provider: "searxng",
+    providerLabel: "SearXNG",
+    configured: true
+  }
 };
 
 afterEach(cleanup);
@@ -70,6 +81,63 @@ function explanationRecord(
   };
 }
 
+function credentialBearingUrl(): string {
+  const url = new URL("https://private.example/result");
+  url.username = "reader";
+  url.password = "token";
+  return url.toString();
+}
+
+function webExplanationRecord(): ExplanationRecord {
+  return {
+    ...explanationRecord(),
+    webContext: {
+      query: "recent damping ratio research",
+      searchedAt: "2026-07-28T19:30:00.000Z",
+      freshness: "week",
+      summary:
+        "Recent sources discuss $\\zeta$ in updated control-system designs.",
+      claims: [
+        {
+          text: "The latest design guidance still treats $\\zeta$ as central.",
+          sourceIds: ["source-1", "missing-source", "source-1", "source-3"]
+        },
+        {
+          text: "This claim has no matching source.",
+          sourceIds: ["missing-source"]
+        }
+      ],
+      sources: [
+        {
+          id: "source-1",
+          title: "Updated damping guidance",
+          url: "https://research.example/update",
+          snippet: "This search-result snippet must remain hidden.",
+          publishedAt: "2026-07-27"
+        },
+        {
+          id: "unsafe-source",
+          title: "Unsafe source",
+          url: "javascript:alert('unsafe')",
+          snippet: "Unsafe content"
+        },
+        {
+          id: "credential-source",
+          title: "Credential-bearing source",
+          url: credentialBearingUrl(),
+          snippet: "Credentials must not be copied into a link."
+        },
+        {
+          id: "source-3",
+          title: "Control systems review",
+          url: "https://news.example/control-review",
+          snippet: "Another hidden snippet."
+        }
+      ]
+    }
+  };
+}
+
 function renderPanel(
   record = explanationRecord(),
   selectedHighlight = highlight,
@@ -81,7 +149,13 @@ function renderPanel(
       mode="equation"
       record={record}
       providerStatus={providerStatus}
+      webSearchEnabled={false}
+      webSearchQuery=""
+      webSearchFreshness="any"
       onModeChange={vi.fn()}
+      onWebSearchEnabledChange={vi.fn()}
+      onWebSearchQueryChange={vi.fn()}
+      onWebSearchFreshnessChange={vi.fn()}
       onExplain={vi.fn()}
       onRecognizeFormula={vi.fn()}
       onExplainWithExtractedText={vi.fn()}
@@ -193,7 +267,13 @@ describe("ExplanationPanel math rendering", () => {
         record={explanationRecord()}
         providerStatus={providerStatus}
         canTreatAsDiagram={false}
+        webSearchEnabled={false}
+        webSearchQuery=""
+        webSearchFreshness="any"
         onModeChange={vi.fn()}
+        onWebSearchEnabledChange={vi.fn()}
+        onWebSearchQueryChange={vi.fn()}
+        onWebSearchFreshnessChange={vi.fn()}
         onExplain={vi.fn()}
         onRecognizeFormula={vi.fn()}
         onExplainWithExtractedText={vi.fn()}
@@ -288,7 +368,13 @@ describe("ExplanationPanel math rendering", () => {
       highlight: formulaHighlight,
       mode: "equation",
       providerStatus,
+      webSearchEnabled: false,
+      webSearchQuery: "",
+      webSearchFreshness: "any",
       onModeChange: vi.fn(),
+      onWebSearchEnabledChange: vi.fn(),
+      onWebSearchQueryChange: vi.fn(),
+      onWebSearchFreshnessChange: vi.fn(),
       onExplain: vi.fn(),
       onRecognizeFormula: vi.fn(),
       onExplainWithExtractedText: vi.fn(),
@@ -420,5 +506,292 @@ describe("ExplanationPanel math rendering", () => {
     expect(
       screen.getByText("The model supplied malformed notation.")
     ).toBeInTheDocument();
+  });
+});
+
+describe("ExplanationPanel web search", () => {
+  it("disables opt-in when no web search provider is configured", () => {
+    renderPanel();
+
+    expect(
+      screen.getByRole("checkbox", { name: "Include current web sources" })
+    ).toBeDisabled();
+    expect(
+      screen.getByText(
+        "Web search is not configured. Configure a search provider to include current sources."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Search query")).toBeNull();
+  });
+
+  it("shows an unavailable provider's configuration explanation", () => {
+    renderPanel(explanationRecord(), highlight, {
+      providerStatus: {
+        ...providerStatus,
+        webSearch: {
+          provider: "searxng",
+          providerLabel: "SearXNG",
+          configured: false,
+          configurationError: "Set WEB_SEARCH_URL before starting Margin."
+        }
+      }
+    });
+
+    expect(
+      screen.getByRole("checkbox", { name: "Include current web sources" })
+    ).toBeDisabled();
+    expect(
+      screen.getByText(
+        "Web search is not configured. Set WEB_SEARCH_URL before starting Margin."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("renders controlled query controls and reports changes without submitting", () => {
+    const onWebSearchEnabledChange = vi.fn();
+    const onWebSearchQueryChange = vi.fn();
+    const onWebSearchFreshnessChange = vi.fn();
+    const onExplain = vi.fn();
+
+    renderPanel(explanationRecord(), highlight, {
+      providerStatus: searchableProviderStatus,
+      webSearchEnabled: true,
+      webSearchQuery: "current damping guidance",
+      webSearchFreshness: "week",
+      onWebSearchEnabledChange,
+      onWebSearchQueryChange,
+      onWebSearchFreshnessChange,
+      onExplain
+    });
+
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Include current web sources"
+    });
+    const query = screen.getByLabelText("Search query");
+    const freshness = screen.getByLabelText("Freshness");
+
+    expect(checkbox).toBeChecked();
+    expect(query).toHaveValue("current damping guidance");
+    expect(query).toHaveAttribute("maxlength", "300");
+    expect(freshness).toHaveValue("week");
+    expect(
+      screen.getByText("The query below goes to SearXNG.")
+    ).toBeInTheDocument();
+
+    fireEvent.change(query, { target: { value: "new research" } });
+    fireEvent.change(freshness, { target: { value: "month" } });
+    fireEvent.click(checkbox);
+
+    expect(onWebSearchQueryChange).toHaveBeenCalledWith("new research");
+    expect(onWebSearchFreshnessChange).toHaveBeenCalledWith("month");
+    expect(onWebSearchEnabledChange).toHaveBeenCalledWith(false);
+    expect(onExplain).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        "This selection and its page context are sent for explanation. Your search query is also sent to SearXNG."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    ["idle", "Explain this passage"],
+    ["error", "Try again"],
+    ["success", "Regenerate"]
+  ] as const)(
+    "blocks the %s explanation action until the search query is valid",
+    (status, actionName) => {
+      const onExplain = vi.fn();
+      const record: ExplanationRecord =
+        status === "success"
+          ? explanationRecord()
+          : {
+              highlightId: highlight.id,
+              mode: "plain",
+              status,
+              error:
+                status === "error" ? "The previous request failed." : undefined
+            };
+
+      renderPanel(record, highlight, {
+        providerStatus: searchableProviderStatus,
+        webSearchEnabled: true,
+        webSearchQuery: " ",
+        onExplain
+      });
+
+      expect(
+        screen.getByText("Enter at least 2 characters to search the web.")
+      ).toBeInTheDocument();
+      const action = screen.getByRole("button", { name: actionName });
+      expect(action).toBeDisabled();
+      fireEvent.click(action);
+      expect(onExplain).not.toHaveBeenCalled();
+    }
+  );
+
+  it("disables formula fallback actions instead of silently ignoring an invalid search query", () => {
+    const onRecognizeFormula = vi.fn();
+    const onExplainWithExtractedText = vi.fn();
+    const formulaHighlight: Highlight = {
+      ...highlight,
+      text: "L(s,o)",
+      content: {
+        kind: "formula",
+        previewImage: "data:image/png;base64,AAAA"
+      }
+    };
+    renderPanel(explanationRecord(), formulaHighlight, {
+      record: undefined,
+      providerStatus: searchableProviderStatus,
+      webSearchEnabled: true,
+      webSearchQuery: " ",
+      formulaRecognition: {
+        highlightId: formulaHighlight.id,
+        status: "error",
+        error: "Could not reach Formula OCR."
+      },
+      onRecognizeFormula,
+      onExplainWithExtractedText
+    });
+
+    const retry = screen.getByRole("button", { name: "Retry formula OCR" });
+    const extracted = screen.getByRole("button", {
+      name: "Explain with extracted text"
+    });
+    expect(retry).toBeDisabled();
+    expect(extracted).toBeDisabled();
+    fireEvent.click(retry);
+    fireEvent.click(extracted);
+    expect(onRecognizeFormula).not.toHaveBeenCalled();
+    expect(onExplainWithExtractedText).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "WEB_SEARCH_NO_RESULTS",
+      "No usable results were found. This explanation was generated without current web sources.",
+      "No current web results"
+    ],
+    [
+      "WEB_SEARCH_TIMEOUT",
+      "The search provider timed out. This explanation was generated without current web sources.",
+      "Current web sources unavailable"
+    ]
+  ])(
+    "keeps a normal explanation visible with a non-fatal %s warning",
+    (code, message, heading) => {
+      renderPanel(
+        {
+          ...explanationRecord(),
+          webSearchWarning: { code, message }
+        },
+        highlight,
+        {
+          providerStatus: searchableProviderStatus,
+          webSearchEnabled: true,
+          webSearchQuery: "current damping research",
+          webSearchFreshness: "month"
+        }
+      );
+
+      expect(screen.getByText("The short version")).toBeInTheDocument();
+      expect(screen.getByText(heading)).toBeInTheDocument();
+      expect(screen.getByText(message)).toBeInTheDocument();
+      expect(screen.queryByText("Latest from the web")).toBeNull();
+      expect(
+        screen.queryByText(
+          "Search settings changed. Regenerate to update this explanation."
+        )
+      ).toBeNull();
+    }
+  );
+
+  it("shows which recorded query produced web context after controls change", () => {
+    renderPanel(webExplanationRecord(), highlight, {
+      providerStatus: searchableProviderStatus,
+      webSearchEnabled: true,
+      webSearchQuery: "an unsent edited query",
+      webSearchFreshness: "week"
+    });
+
+    expect(
+      screen.getByText("recent damping ratio research")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Search settings changed. Regenerate to update this explanation."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("renders only matched, safe citations and source metadata", () => {
+    renderPanel(webExplanationRecord(), highlight, {
+      providerStatus: searchableProviderStatus
+    });
+
+    expect(screen.getByText("Latest from the web")).toBeInTheDocument();
+    expect(screen.getByText("As of Jul 28, 2026")).toBeInTheDocument();
+    expect(screen.getByText("Updated damping guidance")).toBeInTheDocument();
+    expect(screen.getByText("research.example · Jul 27, 2026")).toBeInTheDocument();
+    expect(screen.getByText("news.example")).toBeInTheDocument();
+    expect(
+      screen.getByText("recent damping ratio research")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Web search is off. Regenerate to remove the existing web context."
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("This search-result snippet must remain hidden.")
+    ).toBeNull();
+    expect(screen.queryByText("Unsafe source")).toBeNull();
+    expect(screen.queryByText("Credential-bearing source")).toBeNull();
+
+    const sourceOneCitation = screen.getByRole("link", {
+      name: "Source 1: Updated damping guidance"
+    });
+    const sourceTwoCitation = screen.getByRole("link", {
+      name: "Source 2: Control systems review"
+    });
+    expect(sourceOneCitation).toHaveTextContent("[1]");
+    expect(sourceTwoCitation).toHaveTextContent("[2]");
+
+    const unsupportedClaim = screen
+      .getByText("This claim has no matching source.")
+      .closest("li");
+    expect(unsupportedClaim).not.toBeNull();
+    expect(within(unsupportedClaim!).queryByRole("link")).toBeNull();
+
+    for (const link of screen.getAllByRole("link")) {
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener noreferrer");
+      expect(link.getAttribute("href")).toMatch(/^https:\/\//);
+    }
+  });
+
+  it("includes the web summary, claims, citations, and source URLs when copied", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText }
+    });
+    renderPanel(webExplanationRecord(), highlight, {
+      providerStatus: searchableProviderStatus
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+    const copiedText = writeText.mock.calls[0]?.[0] as string;
+    expect(copiedText).toContain("Latest from the web");
+    expect(copiedText).toContain("Search query: recent damping ratio research");
+    expect(copiedText).toContain(
+      "The latest design guidance still treats $\\zeta$ as central. [1] [2]"
+    );
+    expect(copiedText).toContain("https://research.example/update");
+    expect(copiedText).toContain("https://news.example/control-review");
+    expect(copiedText).not.toContain("javascript:");
+    expect(copiedText).not.toContain("reader:token");
   });
 });
