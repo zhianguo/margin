@@ -1,6 +1,8 @@
 // @vitest-environment node
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   access,
   chmod,
@@ -15,6 +17,11 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const projectRoot = resolve(import.meta.dirname, "..");
+const searxngSettingsHash = createHash("sha256")
+  .update(
+    readFileSync(join(projectRoot, "services", "searxng", "settings.yml"))
+  )
+  .digest("hex");
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -79,33 +86,73 @@ if [[ "$1" == "build" ]]; then
 fi
 
 if [[ "$1" == "image" && "$2" == "inspect" ]]; then
-  echo "sha256:formula-image"
+  image_name="\${!#}"
+  if [[ "$image_name" == *searxng* ]]; then
+    if [[ "$3" != "--format" ]]; then
+      exit "\${LAUNCH_TEST_SEARXNG_IMAGE_STATUS:-0}"
+    fi
+    echo "sha256:searxng-image"
+  else
+    echo "sha256:formula-image"
+  fi
   exit 0
 fi
 
+if [[ "$1" == "image" && "$2" == "pull" ]]; then
+  exit "\${LAUNCH_TEST_SEARXNG_PULL_STATUS:-0}"
+fi
+
 if [[ "$1" == "container" && "$2" == "inspect" ]]; then
+  container_name="\${!#}"
   if [[ "$3" != "--format" ]]; then
+    if [[ "$container_name" == "margin-searxng" ]]; then
+      exit "\${LAUNCH_TEST_SEARXNG_CONTAINER_EXISTS_STATUS:-1}"
+    fi
     exit "\${LAUNCH_TEST_CONTAINER_EXISTS_STATUS:-1}"
   fi
   case "$4" in
     *io.margin.managed*)
-      echo "\${LAUNCH_TEST_MANAGED_LABEL:-formula-ocr}"
+      if [[ "$container_name" == "margin-searxng" ]]; then
+        echo "\${LAUNCH_TEST_SEARXNG_MANAGED_LABEL:-searxng}"
+      else
+        echo "\${LAUNCH_TEST_MANAGED_LABEL:-formula-ocr}"
+      fi
       ;;
     *io.margin.formula-ocr.config*)
       echo "1"
       ;;
+    *io.margin.searxng.config*)
+      echo "\${LAUNCH_TEST_SEARXNG_CONFIG_LABEL:-1}"
+      ;;
+    *io.margin.searxng.settings-sha256*)
+      echo "$LAUNCH_TEST_SEARXNG_SETTINGS_HASH"
+      ;;
     *'.Image'*)
-      echo "sha256:formula-image"
+      if [[ "$container_name" == "margin-searxng" ]]; then
+        echo "sha256:searxng-image"
+      else
+        echo "sha256:formula-image"
+      fi
       ;;
     *PortBindings*)
       if [[ "$4" == *'.HostIp'* ]]; then
-        echo "\${LAUNCH_TEST_HOST_IP:-127.0.0.1}"
+        if [[ "$container_name" == "margin-searxng" ]]; then
+          echo "\${LAUNCH_TEST_SEARXNG_HOST_IP:-127.0.0.1}"
+        else
+          echo "\${LAUNCH_TEST_HOST_IP:-127.0.0.1}"
+        fi
+      elif [[ "$container_name" == "margin-searxng" ]]; then
+        echo "\${SEARXNG_PORT:-8888}"
       else
         echo "\${FORMULA_OCR_PORT:-8502}"
       fi
       ;;
     *State.Running*)
-      echo "\${LAUNCH_TEST_CONTAINER_RUNNING:-true}"
+      if [[ "$container_name" == "margin-searxng" ]]; then
+        echo "\${LAUNCH_TEST_SEARXNG_CONTAINER_RUNNING:-true}"
+      else
+        echo "\${LAUNCH_TEST_CONTAINER_RUNNING:-true}"
+      fi
       ;;
     *Config.Env*)
       printf 'OMP_NUM_THREADS=%s\\n' "\${FORMULA_OCR_THREADS:-4}"
@@ -119,19 +166,34 @@ if [[ "$1" == "container" && "$2" == "inspect" ]]; then
 fi
 
 if [[ "$1" == "run" ]]; then
+  service="formula-ocr"
+  for argument in "$@"; do
+    if [[ "$argument" == "margin-searxng" ]]; then
+      service="searxng"
+    fi
+  done
   previous=""
   for argument in "$@"; do
     if [[ "$previous" == "--env-file" ]]; then
       if grep -q '^FORMULA_OCR_API_KEY=' "$argument"; then
         echo "docker-env-file|api-key-present" >> "$LAUNCH_TEST_LOG"
       fi
+      if grep -q '^SEARXNG_SECRET=' "$argument"; then
+        echo "docker-env-file|searxng-secret-present" >> "$LAUNCH_TEST_LOG"
+      fi
     fi
     previous="$argument"
   done
+  if [[ "$service" == "searxng" ]]; then
+    exit "\${LAUNCH_TEST_SEARXNG_RUN_STATUS:-0}"
+  fi
   exit "\${LAUNCH_TEST_RUN_STATUS:-0}"
 fi
 
 if [[ "$1" == "container" && "$2" == "start" ]]; then
+  if [[ "$3" == "margin-searxng" ]]; then
+    exit "\${LAUNCH_TEST_SEARXNG_START_STATUS:-0}"
+  fi
   exit "\${LAUNCH_TEST_START_STATUS:-0}"
 fi
 
@@ -154,11 +216,13 @@ exit 97
 if [[ "$1" == "ls" ]]; then
   exit 0
 fi
-printf 'npm|%s|provider=%s|model=%s|formula=%s\\n' \
+printf 'npm|%s|provider=%s|model=%s|formula=%s|search=%s|searxng=%s\\n' \
   "$*" \
   "\${LLAMACPP_BASE_URL:-}" \
   "\${LLAMACPP_MODEL:-}" \
-  "\${FORMULA_OCR_BASE_URL:-}" >> "$LAUNCH_TEST_LOG"
+  "\${FORMULA_OCR_BASE_URL:-}" \
+  "\${WEB_SEARCH_PROVIDER:-}" \
+  "\${SEARXNG_BASE_URL:-}" >> "$LAUNCH_TEST_LOG"
 exit 0
 `
   );
@@ -168,6 +232,13 @@ exit 0
     "curl",
     `#!/usr/bin/env bash
 printf 'curl|%s\\n' "$*" >> "$LAUNCH_TEST_LOG"
+if [[ "$*" == *"format=json"* ]]; then
+  if [[ "\${LAUNCH_TEST_CURL_INVALID_JSON:-}" == "1" ]]; then
+    printf '<html>not json</html>\\n'
+  else
+    printf '{"results":[]}\\n'
+  fi
+fi
 exit "\${LAUNCH_TEST_CURL_STATUS:-0}"
 `
   );
@@ -205,7 +276,9 @@ async function runLauncher(
       key.startsWith("FORMULA_OCR_") ||
       key.startsWith("LAUNCH_TEST_") ||
       key.startsWith("LLAMACPP_") ||
-      key.startsWith("LLM_")
+      key.startsWith("LLM_") ||
+      key.startsWith("SEARXNG_") ||
+      key.startsWith("WEB_SEARCH_")
     ) {
       delete inheritedEnvironment[key];
     }
@@ -216,6 +289,7 @@ async function runLauncher(
       ...inheritedEnvironment,
       PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
       LAUNCH_TEST_LOG: logPath,
+      LAUNCH_TEST_SEARXNG_SETTINGS_HASH: searxngSettingsHash,
       ...environment
     },
     stdio: ["ignore", "pipe", "pipe"]
@@ -409,5 +483,178 @@ describe("start.sh Formula OCR Docker startup", () => {
     expect(result.stderr).toContain("cannot be combined");
     expect(result.log).not.toContain("docker|");
     expect(result.log).not.toContain("npm|run dev");
+  });
+});
+
+describe("start.sh SearXNG Docker startup", () => {
+  it("leaves existing search configuration and Docker untouched without the option", async () => {
+    const result = await runLauncher([], {
+      WEB_SEARCH_PROVIDER: "tavily"
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.log).not.toContain("docker|");
+    expect(result.log).toContain("|search=tavily|searxng=");
+  });
+
+  it("pulls, hardens, starts, validates, and configures local search", async () => {
+    const result = await runLauncher(["--start-searxng"], {
+      LAUNCH_TEST_SEARXNG_IMAGE_STATUS: "1",
+      SEARXNG_PORT: "8899"
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.log).toContain(
+      "docker|image pull docker.io/searxng/searxng:2026.7.31-057a77168"
+    );
+    expect(result.log).toContain("docker|run --detach --name margin-searxng");
+    expect(result.log).toContain("--user 977:977 --read-only --cap-drop ALL");
+    expect(result.log).toContain("--security-opt no-new-privileges");
+    expect(result.log).toContain("--publish 127.0.0.1:8899:8080");
+    expect(result.log).toContain(
+      "--mount type=bind,source=" +
+        projectRoot +
+        "/services/searxng/settings.yml,target=/etc/searxng/settings.yml,readonly"
+    );
+    expect(result.log).toContain(
+      "--mount type=volume,source=margin-searxng-data,target=/var/cache/searxng"
+    );
+    expect(result.log).toContain("docker-env-file|searxng-secret-present");
+    expect(result.log).toContain(
+      "--label io.margin.searxng.settings-sha256=" + searxngSettingsHash
+    );
+    expect(result.log).not.toContain("SEARXNG_SECRET=");
+    const envFile = result.log.match(/--env-file ([^ ]+)/)?.[1];
+    expect(envFile).toBeDefined();
+    await expect(access(envFile as string)).rejects.toThrow();
+    expect(result.log).toContain(
+      "curl|--fail --silent --show-error --max-time 2 http://127.0.0.1:8899/healthz"
+    );
+    expect(result.log).toContain("--data-urlencode format=json");
+    expect(result.log).toContain(
+      "npm|run dev|provider=http://127.0.0.1:8080/v1|model=margin-local|formula=|search=searxng|searxng=http://127.0.0.1:8899"
+    );
+  });
+
+  it("reuses an up-to-date running managed container", async () => {
+    const result = await runLauncher(["--start-searxng"], {
+      LAUNCH_TEST_SEARXNG_CONTAINER_EXISTS_STATUS: "0"
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("SearXNG container is already running");
+    expect(result.log).not.toContain("docker|run ");
+    expect(result.log).not.toContain("docker|container rm");
+    expect(result.log).toContain(
+      "|search=searxng|searxng=http://127.0.0.1:8888"
+    );
+  });
+
+  it("starts a stopped but otherwise current managed container", async () => {
+    const result = await runLauncher(["--start-searxng"], {
+      LAUNCH_TEST_SEARXNG_CONTAINER_EXISTS_STATUS: "0",
+      LAUNCH_TEST_SEARXNG_CONTAINER_RUNNING: "false"
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.log).toContain("docker|container start margin-searxng");
+    expect(result.log).not.toContain("docker|run ");
+  });
+
+  it("recreates a managed container that is not bound to loopback", async () => {
+    const result = await runLauncher(["--start-searxng"], {
+      LAUNCH_TEST_SEARXNG_CONTAINER_EXISTS_STATUS: "0",
+      LAUNCH_TEST_SEARXNG_HOST_IP: "0.0.0.0"
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.log).toContain(
+      "docker|container rm --force --volumes margin-searxng"
+    );
+    expect(result.log).toContain("docker|run --detach --name margin-searxng");
+  });
+
+  it("recreates a managed container when its settings have changed", async () => {
+    const result = await runLauncher(["--start-searxng"], {
+      LAUNCH_TEST_SEARXNG_CONTAINER_EXISTS_STATUS: "0",
+      LAUNCH_TEST_SEARXNG_SETTINGS_HASH: "stale-settings"
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.log).toContain(
+      "docker|container rm --force --volumes margin-searxng"
+    );
+    expect(result.log).toContain(
+      "--label io.margin.searxng.settings-sha256=" + searxngSettingsHash
+    );
+  });
+
+  it("refuses to replace an unrelated container with the managed name", async () => {
+    const result = await runLauncher(["--start-searxng"], {
+      LAUNCH_TEST_SEARXNG_CONTAINER_EXISTS_STATUS: "0",
+      LAUNCH_TEST_SEARXNG_MANAGED_LABEL: "another-service"
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("is not managed by Margin");
+    expect(result.log).not.toContain("docker|container rm");
+    expect(result.log).not.toContain("npm|run dev");
+  });
+
+  it("rejects invalid local settings before invoking Docker", async () => {
+    const invalidPort = await runLauncher(["--start-searxng"], {
+      SEARXNG_PORT: "70000"
+    });
+    const invalidTimeout = await runLauncher(["--start-searxng"], {
+      SEARXNG_START_TIMEOUT_SECONDS: "0"
+    });
+
+    expect(invalidPort.code).toBe(2);
+    expect(invalidPort.stderr).toContain("SEARXNG_PORT");
+    expect(invalidPort.log).not.toContain("docker|");
+    expect(invalidTimeout.code).toBe(2);
+    expect(invalidTimeout.stderr).toContain("SEARXNG_START_TIMEOUT_SECONDS");
+    expect(invalidTimeout.log).not.toContain("docker|");
+  });
+
+  it("rejects a successful response that is not SearXNG JSON", async () => {
+    const result = await runLauncher(["--start-searxng"], {
+      LAUNCH_TEST_CURL_INVALID_JSON: "1"
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("JSON search API is unavailable");
+    expect(result.log).not.toContain("npm|run dev");
+  });
+
+  it("starts search and Formula OCR together before Margin", async () => {
+    const result = await runLauncher([
+      "--provider-url",
+      "http://llama-host:8080/v1",
+      "--start-searxng",
+      "--start-formula-ocr"
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.log).toContain("docker|run --detach --name margin-searxng");
+    expect(result.log).toContain(
+      "docker|run --detach --name margin-formula-ocr"
+    );
+    expect(result.log).toContain(
+      "npm|run dev|provider=http://llama-host:8080/v1|model=margin-local|formula=http://127.0.0.1:8502|search=searxng|searxng=http://127.0.0.1:8888"
+    );
+    expect(result.log.lastIndexOf("curl|")).toBeLessThan(
+      result.log.indexOf("npm|run dev")
+    );
+  });
+
+  it("ships a configuration with the JSON search response enabled", async () => {
+    const settings = await readFile(
+      join(projectRoot, "services", "searxng", "settings.yml"),
+      "utf8"
+    );
+
+    expect(settings).toMatch(/formats:\s*\n\s*- html\s*\n\s*- json/);
+    expect(settings).toContain("public_instance: false");
   });
 });

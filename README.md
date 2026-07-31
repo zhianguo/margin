@@ -32,6 +32,23 @@ For the simplest local setup, start llama.cpp separately with the model alias
 The launcher installs the Node.js dependencies when needed and starts Margin.
 Open [http://localhost:5173](http://localhost:5173) in your browser.
 
+To start Margin and a private local SearXNG service together, install Docker and
+run:
+
+```bash
+./start.sh --start-searxng
+```
+
+To start all bundled companions—SearXNG and Formula OCR—at the same time, use:
+
+```bash
+./start.sh --start-searxng --start-formula-ocr
+```
+
+The language-model server is still started separately. See
+[Search setup and operation](SEARCH.md) for what the launcher deploys, Docker
+permissions, configuration, updates, privacy, and troubleshooting.
+
 If llama.cpp is running on another computer, provide its reachable API URL:
 
 ```bash
@@ -64,7 +81,8 @@ details.
 
 Current web sources can be added to an individual explanation when an operator
 configures a search provider and the user explicitly opts in. See
-[Web search](SEARCH.md) for setup, data flow, and limitations.
+[Search setup and operation](SEARCH.md) for local SearXNG deployment, remote
+providers, data flow, and limitations.
 
 ## What works
 

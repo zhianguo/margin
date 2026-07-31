@@ -1,0 +1,20 @@
+# Margin's private, loopback-only SearXNG defaults.
+# SEARXNG_SECRET and the public base URL are supplied by start.sh at runtime.
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "Margin Local Search"
+  enable_metrics: false
+
+search:
+  safe_search: 1
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+server:
+  limiter: false
+  public_instance: false
+  image_proxy: false

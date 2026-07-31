@@ -10,7 +10,115 @@ Search is independent of the language-model provider. For example, Margin can
 retrieve sources from a private SearXNG instance and ask a separately running
 llama.cpp model to synthesize them.
 
-## Quick setup with private SearXNG
+## Deploy private SearXNG with `start.sh`
+
+The simplest deployment runs SearXNG in a hardened Docker container on the
+same system as Margin. Install Docker Engine and `curl`, make sure the account
+running Margin can access the local Docker daemon, then run:
+
+```bash
+./start.sh --start-searxng
+```
+
+This one command:
+
+- pulls Margin's pinned official SearXNG image when it is not already present;
+- creates or reuses the managed `margin-searxng` container;
+- exposes it only at `http://127.0.0.1:8888`;
+- enables the JSON response format required by Margin;
+- waits for both the health endpoint and JSON search endpoint;
+- starts Margin with `WEB_SEARCH_PROVIDER=searxng` and the correct loopback URL.
+
+No search entries are required in `.env` when this option is used. The launcher
+does not start llama.cpp: keep the language-model provider in its own terminal
+or on its separate HTTP-accessible system. For example:
+
+```bash
+./start.sh --provider-url http://llama-host:8080/v1 --start-searxng
+```
+
+To start every bundled companion—local SearXNG and Formula OCR—before Margin:
+
+```bash
+./start.sh --provider-url http://llama-host:8080/v1 \
+  --start-searxng --start-formula-ocr
+```
+
+The container runs as an unprivileged user with a read-only root filesystem,
+all Linux capabilities dropped, and `no-new-privileges`. Its port is bound to
+loopback, a random SearXNG secret is passed through a temporary mode-`0600`
+file, and that file is removed immediately after container creation. The
+launcher refuses to replace a same-named container unless it carries Margin's
+management label.
+
+SearXNG settings are mounted read-only from
+[`services/searxng/settings.yml`](services/searxng/settings.yml). Cached data is
+kept in the named Docker volume `margin-searxng-data`, so it survives container
+replacement. The detached container remains running when Margin stops and uses
+Docker's `unless-stopped` restart policy. Later runs of the same command reuse
+it, or start it if it was stopped. The settings file is fingerprinted; changing
+it causes the next launcher run to replace the managed container so the new
+settings take effect.
+
+Useful management commands are:
+
+```bash
+docker logs -f margin-searxng
+docker restart margin-searxng
+docker stop margin-searxng
+docker start margin-searxng
+```
+
+Verify the deployment directly:
+
+```bash
+curl http://127.0.0.1:8888/healthz
+curl --get 'http://127.0.0.1:8888/search' \
+  --data-urlencode 'q=Margin PDF reader' \
+  --data-urlencode 'format=json'
+```
+
+The launcher accepts these optional environment settings:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SEARXNG_PORT` | `8888` | Loopback host port, from `1` to `65535` |
+| `SEARXNG_IMAGE` | Pinned official image in `start.sh` | Compatible official image tag or digest using SearXNG UID/GID `977:977` |
+| `SEARXNG_START_TIMEOUT_SECONDS` | `120` | Readiness timeout, from `1` to `600` seconds |
+
+For example, to use port 8899:
+
+```bash
+SEARXNG_PORT=8899 ./start.sh --start-searxng
+```
+
+To update SearXNG, review its current migration notes, choose a tested official
+image tag or digest that retains the container's `977:977` SearXNG user, and
+run the launcher with `SEARXNG_IMAGE` set. A changed image causes the managed
+container to be replaced while preserving the named cache volume:
+
+```bash
+SEARXNG_IMAGE=docker.io/searxng/searxng:VERSION \
+  ./start.sh --start-searxng
+```
+
+The official
+[SearXNG container installation guide](https://docs.searxng.org/admin/installation-docker)
+documents its container, Compose, volume, and upgrade options. Margin's
+single-container launcher is intended for a private local instance. Use the
+official Compose deployment, a reverse proxy, TLS, authentication, and network
+access controls before operating a shared or public instance.
+
+Docker normally requires either rootless Docker, membership in the daemon's
+access group, or elevated privileges. The launcher tries direct access first
+and falls back to `sudo` when available. Docker daemon access is effectively
+root-level control of the host, so grant it only to trusted accounts.
+
+Stopping or replacing the container does not delete `margin-searxng-data`.
+Removing that named volume explicitly deletes its cached data. Do that only
+when the data is no longer needed.
+
+## Use an existing or remote SearXNG instance
 
 Use a SearXNG instance that you operate or trust. Its JSON response format must
 be enabled. In the instance's `settings.yml`, include `json` under
