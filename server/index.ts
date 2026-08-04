@@ -18,17 +18,23 @@ import {
 } from "./formula.js";
 import {
   ExplainRequestSchema,
-  generateExplanation,
   getProviderStatus,
   LlmProviderError,
   resolveProviderConfig
 } from "./llm.js";
+import { generateSearchAwareExplanation } from "./explanation.js";
+import {
+  getWebSearchStatus,
+  resolveWebSearchConfig,
+  WebSearchError
+} from "./search.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 8787);
 const isProduction = process.env.NODE_ENV === "production";
 const providerConfig = resolveProviderConfig(process.env);
 const formulaProviderConfig = resolveFormulaProviderConfig(process.env);
+const webSearchConfig = resolveWebSearchConfig(process.env);
 
 app.disable("x-powered-by");
 app.use(
@@ -185,7 +191,8 @@ app.get("/api/health", async (_request: Request, response: Response) => {
   response.json({
     ok: true,
     ...llmStatus,
-    formulaRecognition: formulaStatus
+    formulaRecognition: formulaStatus,
+    webSearch: getWebSearchStatus(webSearchConfig)
   });
 });
 
@@ -208,24 +215,49 @@ app.post(
       return;
     }
 
+    const abortController = new AbortController();
+    const abortProviderRequest = () => abortController.abort();
+    const abortOnResponseClose = () => {
+      if (!response.writableEnded) abortController.abort();
+    };
+    request.once("aborted", abortProviderRequest);
+    response.once("close", abortOnResponseClose);
+
     try {
-      response.json(
-        await generateExplanation(providerConfig, parsedRequest.data)
+      const result = await generateSearchAwareExplanation(
+        providerConfig,
+        webSearchConfig,
+        parsedRequest.data,
+        abortController.signal
       );
+      if (result.webSearchWarning) {
+        console.warn(
+          `[search:${webSearchConfig.provider}]`,
+          result.webSearchWarning.message
+        );
+      }
+      response.json(result);
     } catch (error) {
       const providerError =
-        error instanceof LlmProviderError
+        error instanceof LlmProviderError || error instanceof WebSearchError
           ? error
           : new LlmProviderError(
               "The explanation service failed unexpectedly.",
               "MODEL_REQUEST_FAILED"
             );
 
-      console.error(`[explain:${providerConfig.provider}]`, providerError.message);
+      const service =
+        providerError instanceof WebSearchError
+          ? `search:${webSearchConfig.provider}`
+          : `explain:${providerConfig.provider}`;
+      console.error(`[${service}]`, providerError.message);
       response.status(providerError.status).json({
         error: providerError.message,
         code: providerError.code
       });
+    } finally {
+      request.off("aborted", abortProviderRequest);
+      response.off("close", abortOnResponseClose);
     }
   }
 );

@@ -19,6 +19,48 @@ PDF text is treated as untrusted source material in the model prompt. The
 configured provider may log or retain requests according to its own policy.
 Use a provider and transport appropriate for the sensitivity of the material.
 
+## Optional web search
+
+Web search is disabled unless the server operator sets `WEB_SEARCH_PROVIDER`,
+and it runs only while the user has enabled **Include current web sources** for
+the active selection. Activating a different selection resets the option to
+off. If it remains enabled, regenerating or switching to an unexplained lens
+can issue another search.
+
+Margin pre-fills the editable query from the filename-derived document title
+and selected text, or the recognized/corrected formula when available. If the
+user submits it unchanged, the search provider receives those values. The user
+can edit or remove them before submitting. The provider does not receive the
+complete PDF or extracted page context; the only PDF-derived content it
+receives is whatever remains in the approved query. Margin also sends
+provider-dependent operational parameters such as freshness, safe-search mode,
+language, and result limits.
+
+Search providers may log queries and network metadata under their own policies.
+A self-hosted SearXNG instance may also forward the query to its configured
+upstream search engines.
+
+Margin sends the search results' titles, snippets, and URLs to the configured
+language-model provider, along with result identifiers, available publication
+dates, and search time, together with the normal explanation material so the
+model can synthesize the web context. Search and language-model providers may
+therefore see different parts of the request:
+
+- the search provider sees the approved query and operational search settings;
+- the language-model provider sees the selected material, limited page context,
+  query, and returned web-result metadata.
+
+If the model cannot return a reliably cited web section, Margin may make one
+additional request to the same language-model provider for the ordinary
+explanation without web-result metadata. A failed or empty search does not
+cause the selected PDF material to be sent to the search provider beyond the
+approved query.
+
+Opening a cited URL is a separate browser visit to that external site and is
+subject to the site's own logging and privacy practices. Search and LLM
+credentials remain in server-side configuration and are not sent to the
+browser. See [SEARCH.md](SEARCH.md) for configuration and operational details.
+
 ## Formula recognition
 
 When optional formula recognition is enabled, Margin sends only the bounded

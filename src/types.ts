@@ -4,6 +4,20 @@ export type LlmProvider =
   | "llamacpp"
   | "gemini"
   | "openai-compatible";
+export type WebSearchProvider = "none" | "searxng" | "tavily";
+export type WebSearchFreshness =
+  | "any"
+  | "day"
+  | "week"
+  | "month"
+  | "year";
+
+export interface WebSearchStatus {
+  provider: WebSearchProvider;
+  providerLabel: string;
+  configured: boolean;
+  configurationError?: string;
+}
 
 export interface FormulaRecognitionStatus {
   configured: boolean;
@@ -21,6 +35,7 @@ export interface ProviderStatus {
   providerReachable: boolean | null;
   configurationError?: string;
   formulaRecognition?: FormulaRecognitionStatus;
+  webSearch?: WebSearchStatus;
 }
 
 export interface NormalizedRect {
@@ -124,11 +139,40 @@ export interface Explanation {
   uncertainty: string;
 }
 
+export interface WebSource {
+  id: string;
+  title: string;
+  url: string;
+  snippet: string;
+  publishedAt?: string;
+}
+
+export interface WebClaim {
+  text: string;
+  sourceIds: string[];
+}
+
+export interface WebContext {
+  query: string;
+  searchedAt: string;
+  freshness: WebSearchFreshness;
+  summary: string;
+  claims: WebClaim[];
+  sources: WebSource[];
+}
+
+export interface WebSearchWarning {
+  code: string;
+  message: string;
+}
+
 export interface ExplanationRecord {
   highlightId: string;
   mode: ExplainMode;
   status: "idle" | "loading" | "success" | "error";
   data?: Explanation;
+  webContext?: WebContext;
+  webSearchWarning?: WebSearchWarning;
   error?: string;
   errorCode?: string;
   model?: string;

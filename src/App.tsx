@@ -34,7 +34,8 @@ import type {
   ExplainMode,
   ExplanationRecord,
   Highlight,
-  ProviderStatus
+  ProviderStatus,
+  WebSearchFreshness
 } from "./types";
 
 function recordKey(highlightId: string, mode: ExplainMode): string {
@@ -69,6 +70,25 @@ function isAbortError(error: unknown): boolean {
     (error instanceof DOMException && error.name === "AbortError") ||
     (error instanceof Error && error.name === "AbortError")
   );
+}
+
+interface WebSearchRequest {
+  query: string;
+  freshness: WebSearchFreshness;
+}
+
+function defaultWebSearchQuery(
+  highlight: Highlight,
+  documentTitle: string
+): string {
+  const title = documentTitle.replace(/\.pdf$/i, "").trim();
+  const selectedContent = (
+    getEffectiveFormulaLatex(highlight) || highlight.text
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+  const query = [title, selectedContent].filter(Boolean).join(" ");
+  return query.slice(0, 300).trim();
 }
 
 function abortAllControllers(
@@ -115,6 +135,10 @@ export default function App() {
   const [appError, setAppError] = useState("");
   const [providerStatus, setProviderStatus] =
     useState<ProviderStatus | null>(null);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [webSearchQuery, setWebSearchQuery] = useState("");
+  const [webSearchFreshness, setWebSearchFreshness] =
+    useState<WebSearchFreshness>("month");
   const [generatedVisualPreview, setGeneratedVisualPreview] = useState<
     string | undefined
   >();
@@ -137,6 +161,21 @@ export default function App() {
       : undefined;
   const activeVisualPreview =
     generatedVisualPreview ?? activePersistedPreview;
+
+  useEffect(() => {
+    setWebSearchEnabled(false);
+    setWebSearchQuery(
+      activeHighlight && source
+        ? defaultWebSearchQuery(activeHighlight, source.name)
+        : ""
+    );
+  }, [activeHighlight?.id, source?.name]);
+
+  useEffect(() => {
+    if (providerStatus?.webSearch?.configured !== true) {
+      setWebSearchEnabled(false);
+    }
+  }, [providerStatus?.webSearch?.configured]);
 
   const releaseSource = useCallback((documentSource: DocumentSource | null) => {
     if (documentSource && !documentSource.isDemo && documentSource.url.startsWith("blob:")) {
@@ -320,7 +359,8 @@ export default function App() {
     async (
       highlight: Highlight,
       explanationMode: ExplainMode,
-      useExtractedText = false
+      useExtractedText = false,
+      webSearch?: WebSearchRequest
     ) => {
       if (!source) return;
       const key = recordKey(highlight.id, explanationMode);
@@ -334,7 +374,9 @@ export default function App() {
           highlightId: highlight.id,
           mode: explanationMode,
           status: "loading",
-          data: current[key]?.data
+          data: current[key]?.data,
+          webContext: current[key]?.webContext,
+          webSearchWarning: current[key]?.webSearchWarning
         }
       }));
 
@@ -361,7 +403,8 @@ export default function App() {
             pageContext,
             pageNumber,
             documentTitle: source.name,
-            mode: explanationMode
+            mode: explanationMode,
+            ...(webSearch ? { webSearch } : {})
           },
           controller.signal
         );
@@ -374,6 +417,8 @@ export default function App() {
             mode: explanationMode,
             status: "success",
             data: result.explanation,
+            webContext: result.webContext,
+            webSearchWarning: result.webSearchWarning,
             model: result.model,
             provider: result.provider
           }
@@ -398,6 +443,8 @@ export default function App() {
             mode: explanationMode,
             status: "error",
             data: current[key]?.data,
+            webContext: current[key]?.webContext,
+            webSearchWarning: current[key]?.webSearchWarning,
             error:
               error instanceof Error
                 ? error.message
@@ -416,18 +463,22 @@ export default function App() {
   );
 
   const recognizeAndExplain = useCallback(
-    async (highlight: Highlight, explanationMode: ExplainMode) => {
+    async (
+      highlight: Highlight,
+      explanationMode: ExplainMode,
+      webSearch?: WebSearchRequest
+    ) => {
       if (highlight.content.kind !== "formula") {
-        await runExplanation(highlight, explanationMode);
+        await runExplanation(highlight, explanationMode, false, webSearch);
         return;
       }
       const existingLatex = getEffectiveFormulaLatex(highlight);
       if (existingLatex) {
-        await runExplanation(highlight, explanationMode);
+        await runExplanation(highlight, explanationMode, false, webSearch);
         return;
       }
       if (!highlight.content.region && !highlight.content.previewImage) {
-        await runExplanation(highlight, explanationMode);
+        await runExplanation(highlight, explanationMode, false, webSearch);
         return;
       }
 
@@ -523,7 +574,7 @@ export default function App() {
           const { [updated.id]: _removed, ...remaining } = current;
           return remaining;
         });
-        await runExplanation(updated, explanationMode);
+        await runExplanation(updated, explanationMode, false, webSearch);
       } catch (error) {
         if (isAbortError(error)) {
           if (
@@ -573,15 +624,19 @@ export default function App() {
   );
 
   const explainHighlight = useCallback(
-    (highlight: Highlight, explanationMode: ExplainMode) => {
+    (
+      highlight: Highlight,
+      explanationMode: ExplainMode,
+      webSearch?: WebSearchRequest
+    ) => {
       if (
         highlight.content.kind !== "formula" ||
         getEffectiveFormulaLatex(highlight) ||
         (!highlight.content.region && !highlight.content.previewImage)
       ) {
-        void runExplanation(highlight, explanationMode);
+        void runExplanation(highlight, explanationMode, false, webSearch);
       } else {
-        void recognizeAndExplain(highlight, explanationMode);
+        void recognizeAndExplain(highlight, explanationMode, webSearch);
       }
     },
     [recognizeAndExplain, runExplanation]
@@ -676,6 +731,26 @@ export default function App() {
     if (highlight) explainHighlight(highlight, mode);
   }, [explainHighlight, keepSelection, mode]);
 
+  const getActiveWebSearchRequest = useCallback(
+    (): WebSearchRequest | undefined => {
+      if (
+        !webSearchEnabled ||
+        providerStatus?.webSearch?.configured !== true
+      ) {
+        return undefined;
+      }
+      const query = webSearchQuery.trim();
+      if (query.length < 2) return undefined;
+      return { query, freshness: webSearchFreshness };
+    },
+    [
+      providerStatus?.webSearch?.configured,
+      webSearchEnabled,
+      webSearchFreshness,
+      webSearchQuery
+    ]
+  );
+
   const handleModeChange = useCallback(
     (nextMode: ExplainMode) => {
       setMode(nextMode);
@@ -687,10 +762,18 @@ export default function App() {
           record.status === "success"
       );
       if (!nextRecord && hasAnyAnswer) {
-        explainHighlight(activeHighlight, nextMode);
+        const webSearch = getActiveWebSearchRequest();
+        if (webSearchEnabled && !webSearch) return;
+        explainHighlight(activeHighlight, nextMode, webSearch);
       }
     },
-    [activeHighlight, explainHighlight, records]
+    [
+      activeHighlight,
+      explainHighlight,
+      getActiveWebSearchRequest,
+      records,
+      webSearchEnabled
+    ]
   );
 
   const selectHighlight = useCallback((highlight: Highlight) => {
@@ -992,17 +1075,34 @@ export default function App() {
                 activeHighlight &&
                   isDiagramCandidateHighlight(activeHighlight)
               )}
+              webSearchEnabled={webSearchEnabled}
+              webSearchQuery={webSearchQuery}
+              webSearchFreshness={webSearchFreshness}
+              onWebSearchEnabledChange={setWebSearchEnabled}
+              onWebSearchQueryChange={setWebSearchQuery}
+              onWebSearchFreshnessChange={setWebSearchFreshness}
               onModeChange={handleModeChange}
               onExplain={() => {
-                if (activeHighlight) explainHighlight(activeHighlight, mode);
+                if (!activeHighlight) return;
+                const webSearch = getActiveWebSearchRequest();
+                if (webSearchEnabled && !webSearch) return;
+                explainHighlight(activeHighlight, mode, webSearch);
               }}
               onRecognizeFormula={() => {
                 if (activeHighlight) {
-                  void recognizeAndExplain(activeHighlight, mode);
+                  const webSearch = getActiveWebSearchRequest();
+                  if (webSearchEnabled && !webSearch) return;
+                  void recognizeAndExplain(
+                    activeHighlight,
+                    mode,
+                    webSearch
+                  );
                 }
               }}
               onExplainWithExtractedText={() => {
                 if (!activeHighlight) return;
+                const webSearch = getActiveWebSearchRequest();
+                if (webSearchEnabled && !webSearch) return;
                 setFormulaRecognitionRecords((current) => {
                   const {
                     [activeHighlight.id]: _removed,
@@ -1010,7 +1110,12 @@ export default function App() {
                   } = current;
                   return remaining;
                 });
-                void runExplanation(activeHighlight, mode, true);
+                void runExplanation(
+                  activeHighlight,
+                  mode,
+                  true,
+                  webSearch
+                );
               }}
               onSaveFormulaLatex={saveFormulaLatex}
               onResetFormulaLatex={resetFormulaLatex}

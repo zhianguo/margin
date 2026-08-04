@@ -8,26 +8,35 @@ import {
 } from "./formula.js";
 import {
   ExplainRequestSchema,
-  generateExplanation,
   getProviderStatus,
   type LlmEnvironment,
   LlmProviderError,
   resolveProviderConfig
 } from "./llm.js";
+import { generateSearchAwareExplanation } from "./explanation.js";
+import {
+  getWebSearchStatus,
+  resolveWebSearchConfig,
+  type WebSearchEnvironment,
+  WebSearchError
+} from "./search.js";
 
-interface SitesEnvironment extends LlmEnvironment, FormulaOcrEnvironment {
+interface SitesEnvironment
+  extends LlmEnvironment,
+    FormulaOcrEnvironment,
+    WebSearchEnvironment {
   ASSETS?: {
     fetch(request: Request): Promise<Response>;
   };
 }
 
+const EXPLAIN_RATE_LIMIT = 20;
 const FORMULA_RATE_LIMIT = 20;
-const FORMULA_RATE_WINDOW_MS = 60_000;
-const MAX_FORMULA_RATE_BUCKETS = 10_000;
-const formulaRateBuckets = new Map<
-  string,
-  { count: number; windowStartedAt: number }
->();
+const RATE_WINDOW_MS = 60_000;
+const MAX_RATE_BUCKETS = 10_000;
+type RateBucket = { count: number; windowStartedAt: number };
+const explainRateBuckets = new Map<string, RateBucket>();
+const formulaRateBuckets = new Map<string, RateBucket>();
 
 const apiHeaders = {
   "Content-Type": "application/json",
@@ -46,7 +55,7 @@ function jsonResponse(
   });
 }
 
-function formulaRateLimitKey(request: Request): string {
+function rateLimitKey(request: Request): string {
   return (
     request.headers.get("cf-connecting-ip")?.trim() ||
     request.headers.get("x-forwarded-for")?.split(",", 1)[0]?.trim() ||
@@ -54,30 +63,34 @@ function formulaRateLimitKey(request: Request): string {
   );
 }
 
-function isFormulaRateLimited(request: Request): boolean {
+function isRateLimited(
+  request: Request,
+  rateBuckets: Map<string, RateBucket>,
+  limit: number
+): boolean {
   const now = Date.now();
-  for (const [bucketKey, bucket] of formulaRateBuckets) {
-    if (now - bucket.windowStartedAt >= FORMULA_RATE_WINDOW_MS) {
-      formulaRateBuckets.delete(bucketKey);
+  for (const [bucketKey, bucket] of rateBuckets) {
+    if (now - bucket.windowStartedAt >= RATE_WINDOW_MS) {
+      rateBuckets.delete(bucketKey);
     }
   }
 
-  const key = formulaRateLimitKey(request);
-  const current = formulaRateBuckets.get(key);
+  const key = rateLimitKey(request);
+  const current = rateBuckets.get(key);
 
-  if (!current || now - current.windowStartedAt >= FORMULA_RATE_WINDOW_MS) {
-    formulaRateBuckets.set(key, { count: 1, windowStartedAt: now });
-  } else if (current.count >= FORMULA_RATE_LIMIT) {
+  if (!current || now - current.windowStartedAt >= RATE_WINDOW_MS) {
+    rateBuckets.set(key, { count: 1, windowStartedAt: now });
+  } else if (current.count >= limit) {
     return true;
   } else {
     current.count += 1;
   }
 
-  if (formulaRateBuckets.size > MAX_FORMULA_RATE_BUCKETS) {
-    while (formulaRateBuckets.size > MAX_FORMULA_RATE_BUCKETS) {
-      const oldestKey = formulaRateBuckets.keys().next().value;
+  if (rateBuckets.size > MAX_RATE_BUCKETS) {
+    while (rateBuckets.size > MAX_RATE_BUCKETS) {
+      const oldestKey = rateBuckets.keys().next().value;
       if (typeof oldestKey !== "string") break;
-      formulaRateBuckets.delete(oldestKey);
+      rateBuckets.delete(oldestKey);
     }
   }
   return false;
@@ -189,19 +202,34 @@ async function explain(
   }
 
   const providerConfig = resolveProviderConfig(environment);
+  const webSearchConfig = resolveWebSearchConfig(environment);
   try {
-    return jsonResponse(
-      await generateExplanation(providerConfig, payload.data)
+    const result = await generateSearchAwareExplanation(
+      providerConfig,
+      webSearchConfig,
+      payload.data,
+      request.signal
     );
+    if (result.webSearchWarning) {
+      console.warn(
+        `[search:${webSearchConfig.provider}]`,
+        result.webSearchWarning.message
+      );
+    }
+    return jsonResponse(result);
   } catch (error) {
     const providerError =
-      error instanceof LlmProviderError
+      error instanceof LlmProviderError || error instanceof WebSearchError
         ? error
         : new LlmProviderError(
             "The explanation service failed unexpectedly.",
             "MODEL_REQUEST_FAILED"
           );
-    console.error(`[explain:${providerConfig.provider}]`, providerError.message);
+    const service =
+      providerError instanceof WebSearchError
+        ? `search:${webSearchConfig.provider}`
+        : `explain:${providerConfig.provider}`;
+    console.error(`[${service}]`, providerError.message);
     return jsonResponse(
       { error: providerError.message, code: providerError.code },
       providerError.status
@@ -216,6 +244,7 @@ async function handleRequest(
   const url = new URL(request.url);
   const providerConfig = resolveProviderConfig(environment);
   const formulaProviderConfig = resolveFormulaProviderConfig(environment);
+  const webSearchConfig = resolveWebSearchConfig(environment);
 
   if (url.pathname === "/api/health" && request.method === "GET") {
     const [llmStatus, formulaStatus] = await Promise.all([
@@ -225,7 +254,8 @@ async function handleRequest(
     return jsonResponse({
       ok: true,
       ...llmStatus,
-      formulaRecognition: formulaStatus
+      formulaRecognition: formulaStatus,
+      webSearch: getWebSearchStatus(webSearchConfig)
     });
   }
 
@@ -234,6 +264,17 @@ async function handleRequest(
       return jsonResponse(
         { error: "Method not allowed.", code: "METHOD_NOT_ALLOWED" },
         405
+      );
+    }
+    if (isRateLimited(request, explainRateBuckets, EXPLAIN_RATE_LIMIT)) {
+      return jsonResponse(
+        {
+          error:
+            "Too many explanation requests. Please wait a moment and try again.",
+          code: "RATE_LIMITED"
+        },
+        429,
+        { "Retry-After": "60" }
       );
     }
     return explain(request, environment);
@@ -246,7 +287,7 @@ async function handleRequest(
         405
       );
     }
-    if (isFormulaRateLimited(request)) {
+    if (isRateLimited(request, formulaRateBuckets, FORMULA_RATE_LIMIT)) {
       return jsonResponse(
         {
           error:

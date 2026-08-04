@@ -32,6 +32,23 @@ For the simplest local setup, start llama.cpp separately with the model alias
 The launcher installs the Node.js dependencies when needed and starts Margin.
 Open [http://localhost:5173](http://localhost:5173) in your browser.
 
+To start Margin and a private local SearXNG service together, install Docker and
+run:
+
+```bash
+./start.sh --start-searxng
+```
+
+To start all bundled companions—SearXNG and Formula OCR—at the same time, use:
+
+```bash
+./start.sh --start-searxng --start-formula-ocr
+```
+
+The language-model server is still started separately. See
+[Search setup and operation](SEARCH.md) for what the launcher deploys, Docker
+permissions, configuration, updates, privacy, and troubleshooting.
+
 If llama.cpp is running on another computer, provide its reachable API URL:
 
 ```bash
@@ -62,6 +79,11 @@ Explanation requests send the selected material and limited page context to
 the provider you configured. See [How data moves](#how-data-moves) for the
 details.
 
+Current web sources can be added to an individual explanation when an operator
+configures a search provider and the user explicitly opts in. See
+[Search setup and operation](SEARCH.md) for local SearXNG deployment, remote
+providers, data flow, and limitations.
+
 ## What works
 
 - Local PDF opening and an included three-page engineering demo paper
@@ -71,6 +93,8 @@ details.
 - Highlights stored as page-relative rectangles so they stay aligned at any zoom
 - Per-document highlights persisted in browser storage
 - Plain-language, deep, and equation-focused explanation lenses
+- Optional current web sources with per-selection opt-in, editable query,
+  freshness, and citations
 - Selectable OpenAI, Google Gemini, generic Chat Completions, or local llama.cpp
   explanation providers
 - Schema-constrained output with runtime validation for every provider
@@ -333,6 +357,14 @@ asks for an explanation, it sends only:
 - the recognized or manually corrected formula, when available;
 - extracted text from that page, capped at 16,000 characters;
 - the page number, document title, and selected explanation lens.
+
+When the user also chooses **Include current web sources**, the configured
+search provider receives the user-approved query and search controls, but not
+the PDF or extracted page context. Margin initially builds that editable query
+from the filename-derived document title and selected content. It sends the
+returned titles, snippets, URLs, and source metadata to the selected LLM
+alongside the explanation material. See [SEARCH.md](SEARCH.md) for the complete
+optional-search flow and disclosure boundary.
 
 Provider URLs and API keys never enter the browser bundle. PDF content is
 treated as untrusted source material in the model prompt, so instructions
