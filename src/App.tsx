@@ -1,3 +1,5 @@
+import { FollowUpThread } from "./components/FollowUpThread";
+import { deleteThread } from "./lib/threads";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppHeader } from "./components/AppHeader";
@@ -930,6 +932,8 @@ export default function App() {
     if (!activeHighlightId) return;
     abortHighlightExplanations(activeHighlightId);
     abortHighlightFormulaRecognition(activeHighlightId);
+    const deletedHighlight = highlightsRef.current.find((item) => item.id === activeHighlightId);
+    if (deletedHighlight) deleteThread(deletedHighlight);
     setHighlights((current) => {
       const next = current.filter(
         (highlight) => highlight.id !== activeHighlightId
@@ -1068,6 +1072,24 @@ export default function App() {
               highlight={activeHighlight}
               mode={mode}
               record={activeRecord}
+              followUpThread={activeHighlight && source ? (
+                <FollowUpThread
+                  key={`${source.id}:${activeHighlight.id}:${activeHighlight.text}:${JSON.stringify(activeHighlight.content)}`}
+                  highlight={activeHighlight}
+                  record={activeRecord}
+                  getContext={async () => ({
+                    selectedText: activeHighlight.text.slice(0, 8_000),
+                    selectedFormulaLatex: getEffectiveFormulaLatex(activeHighlight),
+                    ...(activeHighlight.content.kind === "diagram" ? {
+                      visualContext: { kind: "diagram" as const, layoutText: activeHighlight.content.layoutText }
+                    } : {}),
+                    pageContext: await getPageContext(activeHighlight.pages[0]?.pageNumber ?? 1),
+                    pageNumber: activeHighlight.pages[0]?.pageNumber ?? 1,
+                    documentTitle: source.name.slice(0, 300),
+                    mode
+                  })}
+                />
+              ) : null}
               formulaRecognition={activeFormulaRecognition}
               providerStatus={providerStatus}
               visualPreviewImage={activeVisualPreview}

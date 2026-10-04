@@ -178,3 +178,13 @@ export interface ExplanationRecord {
   model?: string;
   provider?: LlmProvider;
 }
+
+export interface ConversationTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+export interface HighlightThread {
+  version: 1;
+  seed: string;
+  turns: ConversationTurn[];
+}

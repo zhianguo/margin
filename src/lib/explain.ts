@@ -7,7 +7,8 @@ import type {
   WebSearchFreshness
 } from "../types";
 
-interface ExplainPayload {
+export interface ExplainPayload {
+  followUp?: { question: string; turns: Array<{ role: "user" | "assistant"; content: string }> };
   selectedText: string;
   selectedFormulaLatex?: string;
   visualContext?: {

@@ -35,6 +35,7 @@ import { formatDisplayMath } from "../lib/math";
 import { InlineRichText, RichText } from "./RichText";
 
 interface ExplanationPanelProps {
+  followUpThread?: import("react").ReactNode;
   highlight: Highlight | null;
   mode: ExplainMode;
   record?: ExplanationRecord;
@@ -141,6 +142,7 @@ function formatWebDate(value: string): string {
 
 export function ExplanationPanel({
   highlight,
+  followUpThread,
   mode,
   record,
   formulaRecognition,
@@ -1020,6 +1022,8 @@ export function ExplanationPanel({
               </div>
             </article>
           ) : null}
+
+          {followUpThread}
 
           <div className="context-disclosure">
             <span className="context-dot" />
