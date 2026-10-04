@@ -2908,3 +2908,12 @@ textarea:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
+
+.follow-up-thread { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border, #ddd); }
+.follow-up-thread p, .follow-up-thread small { line-height: 1.6; }
+.follow-up-thread form { display: grid; gap: 10px; margin: 16px 0; }
+.follow-up-thread textarea { min-height: 80px; resize: vertical; width: 100%; padding: 10px; font: inherit; border: 1px solid #ccc; border-radius: 8px; }
+.follow-up-thread button { padding: 10px; border-radius: 8px; cursor: pointer; }
+.follow-up-thread button:disabled { opacity: .5; cursor: default; }
+.thread-turn { margin: 12px 0; padding: 12px; border-radius: 8px; background: #f5f3ec; overflow-wrap: anywhere; }
+.thread-turn.user { background: #eef2ed; }

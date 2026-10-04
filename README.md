@@ -462,8 +462,17 @@ secured HTTPS endpoint.
   order.
 - Non-text figures and tables are not yet selectable as visual regions.
 - Highlights are local to one browser; export and account sync are not included.
-- The first release keeps one structured explanation per passage/lens and does
-  not yet provide a follow-up chat thread.
+- Each saved highlight supports a follow-up Q&A transcript stored in this browser.
+  The initial structured explanation remains separate per passage/lens. Switching
+  highlights restores their individual conversations; switching lenses and
+  regenerating explanations preserve the transcript and its original explanation
+  context. Pending follow-ups are cancelled on regeneration or leaving the panel.
+  Deleting a highlight deletes its transcript. Conversations are limited to 50
+  exchanges; requests include only the bounded passage (8,000 characters), page
+  context (16,000), optional formula/diagram text, the original explanation (4,000),
+  the latest three exchanges (4,000 characters per turn), and the current question
+  (2,000). No PDF file, other highlights, or web search is sent for follow-ups.
+  If browser storage is unavailable, the panel reports that the thread is temporary.
 
 Useful next additions would be region-based figure explanation, full-page OCR,
 annotation export, paper-wide search, and citation-aware follow-up questions.
